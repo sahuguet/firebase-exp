@@ -1,0 +1,194 @@
+<html>
+<head>
+  <meta http-equiv="Content-Type" content="text/html;charset=UTF-8">
+  <meta charset="utf-8">
+  <script src="https://cdn.firebase.com/js/client/2.2.1/firebase.js"></script>
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.9.0/jquery.min.js"></script>
+  <script src="js/libs/idle.js"></script>
+  <link rel="stylesheet" type="text/css" href="css/example.css">
+  <link rel="stylesheet" href="//maxcdn.bootstrapcdn.com/font-awesome/4.3.0/css/font-awesome.min.css">
+  <style>
+  .idea { height: 50px; background-color: yellow; margin-top: 5px; margin-bottom: 5px;};
+  </style
+</head>
+<body>
+
+<h1>Voting Page</h1>
+<p>For this vote, you have <span id="total_credits">12</span  > credits to spend the way you want.</p>
+<p>You have <span id="left_credits">??</span> credit(s) left.</p>
+
+<div>
+Hello, <span id="username"></span>.
+</div>
+
+<button id="add-idea">Add idea</button>
+
+<div id="ideas-count"></div>
+  
+<div id="ideas-container">
+  <ul id="ideas-ul"/>
+</div>
+
+<div id="users-container">
+<h1>List of users participating in this vote:</h1>
+  <ul id="users-ul"/>
+</div>
+
+<script>
+ var MAX_VOTES = parseInt($('#total_credits').text());
+  var projectListRef = new Firebase("https://popping-fire-1331.firebaseio.com/voting");
+  var userId = null;
+  var change = null;
+  var left_credits = null;
+  projectListRef.authWithOAuthPopup("google", function(error, authData) {
+  if (error) {
+    console.log("Login Failed!", error);
+  } else {
+    console.log("Authenticated successfully with payload:", authData);
+    userId = authData.uid;
+    projectListRef.child('users').child(userId).update(authData);
+    projectListRef.child('users').child(userId).once('value', function(dataSnapshot) {
+      console.log(dataSnapshot.val());
+      if (dataSnapshot.child('max_votes').exists()) {
+        console.log('User already exists; not changing max_vote.');
+        } else {
+        projectListRef.child('users').child(userId).update({'max_votes': MAX_VOTES});
+        console.log('Creating new user with max_vote.');
+      }
+      left_credits = dataSnapshot.child('max_votes').val();
+      $('#left_credits').text(left_credits);
+      });
+    $('#username').text(authData.google.displayName);
+
+    projectListRef.child('users').child(userId)
+    .child('max_votes').on('value', function(snapshot) {
+      console.log('max_votes changed.');
+      left_credits = snapshot.val();
+    $('#left_credits').text(left_credits);
+    });
+  }
+  });
+
+  var count = 0;
+
+  // ON REMOVE
+  projectListRef.on("child_removed", function(snapshot) {
+    //console.log("Entering child_removed.")
+    var project = snapshot.val();
+    var project_id = snapshot.key();
+    //console.log(project);
+    $('li[data-id="' + project_id + '"]').remove();
+    count--;
+    $('#ideas-count').text(count + ' ideas so far.');
+  });
+
+  // ON ADD
+  projectListRef.on("child_added", function(snapshot) {
+    //console.log("Entering child_added.")
+    var project = snapshot.val();
+    var project_id = snapshot.key();
+    //console.log(project);
+
+    count++;
+    $('#ideas-count').text(count + ' ideas so far.');
+
+    // Add trash icon to remove item.
+    var delProjectBtn = $('<i class="delete-project fa fa-trash-o"></i>')
+      .click(function() {
+        var project_id = $(this).parent().attr('data-id');
+        projectListRef.child(project_id).remove();
+        console.log("Project removed.");
+      });
+
+    // Add voting buttons
+    var plus = function(){
+      if (left_credits == 0) {
+        console.log('No more credits for voting.');
+        return;
+      }
+      projectListRef.child(project_id)
+        .child('votes')
+        .child(userId)
+        .child('vote').once('value', function(dataSnapshot) {
+          change = dataSnapshot;
+          userVote = dataSnapshot.val();
+          if (userVote == -1 || userVote == null) {
+            projectListRef.child(project_id)
+              .child('votes').child(userId).set({'vote': 1});
+            projectListRef.child(project_id)
+              .child('count').transaction(function(count) { return count+1; });
+              } else {
+                return;
+              }
+        });
+    } // End plus().
+
+    var minus = function() {
+      projectListRef.child(project_id)
+        .child('votes')
+        .child(userId)
+        .child('vote').once('value', function(dataSnapshot) {
+          console.log(dataSnapshot);
+          userVote = dataSnapshot.val();
+          if (userVote == 1 || userVote == null) {
+            projectListRef.child(project_id)
+              .child('votes').child(userId).set({'vote': -1});
+            projectListRef.child(project_id)
+              .child('count').transaction(function(count) { return count-1; });
+              } else {
+                return;
+              }
+        });
+    } // End minus().
+
+
+    var votingBtn = $('<div/>')
+    .append($('<i class="vote-up fa fa-thumbs-up"></i>').click(plus))
+    .append($('<span>&nbsp;</span>'))
+    .append($('<i class="vote-down fa fa-thumbs-down"></i>').click(minus))
+
+    // We display all the items in the list.
+    $('<li class="idea"/>')
+    .text(project.name).attr('data-id', project_id)
+    .append('&nbsp;')
+    .append(delProjectBtn)
+    .append(votingBtn)
+    .append($('<div></div>').attr('id', project_id + '-count'))
+    .appendTo('#ideas-ul');
+    console.log("Leaving child_added.")
+
+    // We create a trigger for each time the vote count is changed.
+    projectListRef.child(project_id).child("count").on("value", function(snapshot) {
+      $('#' + project_id + '-count').text(snapshot.val());
+      console.log("Count updated for project " + project_id);
+    });
+
+  });
+
+  projectListRef.child("users").on("child_added", function(snapshot) {
+    var user = snapshot.val();
+    $('<li class="user"/>')
+    .text(user.google.displayName)
+    .appendTo('#users-ul');
+  });
+
+
+  $( document ).ready(function() {
+
+    // Button to add a new idea
+    $('#add-idea').click(function() {
+      projectListRef.push({ 'count': 0, 'name': 'idea' + (count+1)});
+      console.log("New idea added.");
+    })
+
+    // Trash icon to delete an idea
+    $('.delete-project').click(function() {
+      console.log('test');
+    });
+
+
+  }); // document.ready
+
+</script>
+</body>
+</html>
